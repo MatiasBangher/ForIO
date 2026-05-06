@@ -290,11 +290,15 @@ function ExamPage({ questions }: { questions: Question[] }) {
   const [selected, setSelected] = useState("");
   const [dndAnswers, setDndAnswers] = useState<string[]>([]);
   const [tableAnswers, setTableAnswers] = useState<Record<string, string>>({});
+  const [checked, setChecked] = useState<null | boolean>(null);
+  const [currentTableResults, setCurrentTableResults] = useState<Record<string, boolean>>({});
 
   function resetCurrentAnswer() {
     setSelected("");
     setDndAnswers([]);
     setTableAnswers({});
+    setChecked(null);
+    setCurrentTableResults({});
   }
 
   function startExam() {
@@ -315,10 +319,7 @@ function ExamPage({ questions }: { questions: Question[] }) {
     resetCurrentAnswer();
   }
 
-  function currentAnswer(): ExamAnswer | null {
-    if (!examQuestions) return null;
-    const question = examQuestions[index];
-    if (!question) return null;
+  function buildCurrentAnswer(question: Question): ExamAnswer | null {
     if (question.type === "multiple_choice") {
       return selected ? { type: "multiple_choice", selected } : null;
     }
@@ -328,33 +329,28 @@ function ExamPage({ questions }: { questions: Question[] }) {
     return Object.keys(tableAnswers).length > 0 ? { type: "table_drag_and_drop", answers: tableAnswers } : null;
   }
 
-  function saveAndNext() {
+  function validate() {
     if (!examQuestions) return;
-    const answer = currentAnswer();
-    const nextAnswers = [...collectedAnswers, answer];
-    setCollectedAnswers(nextAnswers);
-
-    if (index + 1 >= examQuestions.length) {
-      const examResults: ExamQuestionResult[] = examQuestions.map((question, i) => {
-        const ans = nextAnswers[i] ?? null;
-        const { isCorrect, tableResults } = evaluateExamAnswer(question, ans);
-        return { question, answer: ans, isCorrect, tableResults };
-      });
-      setResults(examResults);
-    } else {
-      setIndex((current) => current + 1);
-      resetCurrentAnswer();
+    const question = examQuestions[index];
+    const answer = buildCurrentAnswer(question);
+    const { isCorrect, tableResults } = evaluateExamAnswer(question, answer);
+    setChecked(isCorrect);
+    if (tableResults) {
+      setCurrentTableResults(tableResults);
     }
+    setCollectedAnswers((current) => {
+      const next = [...current];
+      next[index] = answer;
+      return next;
+    });
   }
 
-  function skipQuestion() {
+  function next() {
     if (!examQuestions) return;
-    const nextAnswers = [...collectedAnswers, null];
-    setCollectedAnswers(nextAnswers);
-
     if (index + 1 >= examQuestions.length) {
+      const finalAnswers = collectedAnswers;
       const examResults: ExamQuestionResult[] = examQuestions.map((question, i) => {
-        const ans = nextAnswers[i] ?? null;
+        const ans = finalAnswers[i] ?? null;
         const { isCorrect, tableResults } = evaluateExamAnswer(question, ans);
         return { question, answer: ans, isCorrect, tableResults };
       });
@@ -431,13 +427,12 @@ function ExamPage({ questions }: { questions: Question[] }) {
           <h1>Modo Examen</h1>
           <p className="exam-start-desc">
             Se seleccionarán <strong>{count} preguntas aleatorias</strong> del banco de{" "}
-            <strong>{questions.length} preguntas</strong>. No verás si cada respuesta es
-            correcta hasta el final.
+            <strong>{questions.length} preguntas</strong>.
           </p>
           <ul className="exam-rules">
-            <li>Respondé cada pregunta y avanzá con <strong>Siguiente</strong></li>
-            <li>Podés omitir preguntas con el botón <strong>Omitir</strong></li>
-            <li>Al terminar verás tu puntaje y la revisión completa</li>
+            <li>Respondé cada pregunta y validá con <strong>Validar</strong></li>
+            <li>Verás el resultado de cada respuesta antes de continuar</li>
+            <li>Al terminar verás tu puntaje final y la revisión completa</li>
           </ul>
           <button className="primary-button exam-start-btn" type="button" onClick={startExam}>
             <GraduationCap size={20} />
@@ -451,14 +446,14 @@ function ExamPage({ questions }: { questions: Question[] }) {
   const question = examQuestions[index];
   const total = examQuestions.length;
 
-  const canConfirm =
+  const canValidate =
     question.type === "multiple_choice"
       ? Boolean(selected)
       : question.type === "drag_and_drop"
         ? dndAnswers.filter(Boolean).length === question.correctAnswers.length
         : tableBlankCells(question.table).every((cell) => Boolean(tableAnswers[cellKey(cell.row, cell.col)]));
 
-  const progress = ((index) / total) * 100;
+  const progress = (index / total) * 100;
 
   return (
     <main className="main">
@@ -483,6 +478,7 @@ function ExamPage({ questions }: { questions: Question[] }) {
             {question.options.map((option) => (
               <button
                 className={`choice ${selected === option ? "selected" : ""}`}
+                disabled={checked !== null}
                 key={option}
                 type="button"
                 onClick={() => setSelected(option)}
@@ -496,7 +492,7 @@ function ExamPage({ questions }: { questions: Question[] }) {
             key={question.id}
             textParts={question.textParts}
             options={question.draggableOptions}
-            disabled={false}
+            disabled={checked !== null}
             onChange={setDndAnswers}
           />
         ) : (
@@ -504,19 +500,25 @@ function ExamPage({ questions }: { questions: Question[] }) {
             key={question.id}
             table={question.table}
             options={question.draggableOptions}
-            disabled={false}
-            results={undefined}
+            disabled={checked !== null}
+            results={checked !== null ? currentTableResults : undefined}
             onChange={setTableAnswers}
           />
         )}
 
-        <div className="actions-row exam-actions-row">
-          <button className="ghost-button" type="button" onClick={skipQuestion}>
-            Omitir
-          </button>
-          <button className="primary-button" type="button" disabled={!canConfirm} onClick={saveAndNext}>
-            {index + 1 === total ? "Finalizar examen" : "Siguiente"}
-          </button>
+        {checked !== null ? <Feedback question={question} isCorrect={checked} /> : null}
+
+        <div className="actions-row">
+          {checked === null ? (
+            <button className="primary-button" type="button" disabled={!canValidate} onClick={validate}>
+              <CheckCircle2 size={18} />
+              Validar
+            </button>
+          ) : (
+            <button className="primary-button" type="button" onClick={next}>
+              {index + 1 === total ? "Ver resultados" : "Siguiente"}
+            </button>
+          )}
         </div>
       </section>
       <div className="practice-footer">
